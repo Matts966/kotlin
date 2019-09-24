@@ -6,8 +6,8 @@
 package org.jetbrains.kotlin.idea.perf
 
 import org.jetbrains.kotlin.idea.perf.WholeProjectPerformanceTest.Companion.nsToMs
-import org.jetbrains.kotlin.idea.perf.profilers.async.DummyProfilerHandler
-import org.jetbrains.kotlin.idea.perf.profilers.async.ProfilerHandler
+import org.jetbrains.kotlin.idea.perf.profilers.async.*
+import org.jetbrains.kotlin.idea.perf.profilers.*
 import org.jetbrains.kotlin.idea.testFramework.logMessage
 import org.jetbrains.kotlin.util.PerformanceCounter
 import java.io.*
@@ -19,7 +19,11 @@ import kotlin.test.assertEquals
 
 typealias StatInfos = Map<String, Any>?
 
-class Stats(val name: String = "", val header: Array<String> = arrayOf("Name", "ValueMS", "StdDev")) : Closeable {
+class Stats(
+    val name: String = "",
+    val header: Array<String> = arrayOf("Name", "ValueMS", "StdDev"),
+    val acceptanceStabilityLevel: Int = 15
+) : Closeable {
 
     private val perfTestRawDataMs = mutableListOf<Long>()
 
@@ -49,7 +53,7 @@ class Stats(val name: String = "", val header: Array<String> = arrayOf("Name", "
         for (v in listOf(
             Triple("mean", "", calcMean.mean.toLong()),
             Triple("stdDev", " stdDev", calcMean.stdDev.toLong()),
-            Triple("geomMean", "geomMean", calcMean.geomMean.toLong())
+            Triple("geomMean", " geomMean", calcMean.geomMean.toLong())
         )) {
             val n = "$id : ${v.first}"
 
@@ -63,7 +67,7 @@ class Stats(val name: String = "", val header: Array<String> = arrayOf("Name", "
             .fold(mutableSetOf<String>(), { acc, keys -> acc.addAll(keys); acc })
             .filter { it != TEST_KEY && it != ERROR_KEY }
             .sorted().forEach { perfCounterName ->
-                val values = statInfosArray.map { (it?.get(perfCounterName) as Long) }.toLongArray()
+                val values = statInfosArray.map { (it?.get(perfCounterName) as? Long) ?: 0L }.toLongArray()
                 val statInfoMean = calcMean(values)
 
                 val n = "$id : $perfCounterName"
@@ -147,6 +151,14 @@ class Stats(val name: String = "", val header: Array<String> = arrayOf("Name", "
             assertEquals(iterations, statInfoArray.size)
             if (testName != WARM_UP) {
                 appendTimings(testName, statInfoArray)
+
+                // do not estimate stability for warm-up
+                if (!testName.contains(WARM_UP)) {
+                    val calcMean = calcMean(statInfoArray)
+                    val stabilityPercentage = round(calcMean.stdDev * 100.0 / calcMean.mean).toInt()
+                    logMessage { "$testName stability is $stabilityPercentage %" }
+                    check(stabilityPercentage <= acceptanceStabilityLevel) { "$testName is not stable: stability above $stabilityPercentage %" }
+                }
             }
         }
 
@@ -202,19 +214,8 @@ class Stats(val name: String = "", val header: Array<String> = arrayOf("Name", "
         warmUpStatInfosArray.filterNotNull().map { it[ERROR_KEY] as? Exception }.firstOrNull()?.let { throw it }
     }
 
-    private fun <SV, TV> mainPhase(phaseData: PhaseData<SV, TV>): Array<StatInfos> {
-        val statInfosArray = phase(phaseData, "")
-
-        // do not estimate stability for warm-up
-        if (!phaseData.testName.contains(WARM_UP)) {
-            val calcMean = calcMean(statInfosArray)
-            val stabilityPercentage = round(calcMean.stdDev * 100.0 / calcMean.mean).toInt()
-            logMessage { "${phaseData.testName} stability is $stabilityPercentage %" }
-            check(stabilityPercentage <= 10) { "${phaseData.testName} is not stable: stability above $stabilityPercentage %" }
-        }
-
-        return statInfosArray
-    }
+    private fun <SV, TV> mainPhase(phaseData: PhaseData<SV, TV>): Array<StatInfos> =
+        phase(phaseData, "")
 
     private fun <SV, TV> phase(phaseData: PhaseData<SV, TV>, phaseName: String): Array<StatInfos> {
         val statInfosArray = Array<StatInfos>(phaseData.iterations) { null }
@@ -275,13 +276,13 @@ class Stats(val name: String = "", val header: Array<String> = arrayOf("Name", "
         val profilerHandler = if (phaseData.profileEnabled) ProfilerHandler.getInstance() else DummyProfilerHandler
 
         return if (profilerHandler != DummyProfilerHandler) {
-            val profilerPath = pathToResource("profile/${plainname()}/")
+            val profilerPath = pathToResource("profile/${plainname()}")
             check(with(File(profilerPath)) { exists() || mkdirs() }) { "unable to mkdirs $profilerPath for ${phaseData.testName}" }
             val activityName = "${phaseData.testName}-${if (phaseName.isEmpty()) "" else "$phaseName-"}$attempt"
 
             ActualPhaseProfiler(activityName, profilerPath, profilerHandler)
         } else {
-            dummyPhaseProfiler
+            DummyPhaseProfiler
         }
     }
 
@@ -312,11 +313,6 @@ class Stats(val name: String = "", val header: Array<String> = arrayOf("Name", "
         const val ERROR_KEY = "error"
 
         const val WARM_UP = "warm-up"
-
-        private val dummyPhaseProfiler = object : PhaseProfiler {
-            override fun start() {}
-            override fun stop() {}
-        }
 
         inline fun runAndMeasure(note: String, block: () -> Unit) {
             val openProjectMillis = measureTimeMillis {
@@ -386,22 +382,6 @@ class Stats(val name: String = "", val header: Array<String> = arrayOf("Name", "
         }
     }
 
-    private interface PhaseProfiler {
-        fun start()
-
-        fun stop()
-    }
-
-    private class ActualPhaseProfiler(val activityName: String, val profilerPath: String, val profilerHandler: ProfilerHandler) :
-        PhaseProfiler {
-        override fun start() {
-            profilerHandler.startProfiling(activityName)
-        }
-
-        override fun stop() {
-            profilerHandler.stopProfiling(profilerPath, activityName)
-        }
-    }
 }
 
 data class PhaseData<SV, TV>(
