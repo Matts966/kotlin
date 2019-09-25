@@ -41,7 +41,7 @@ class KotlinUIdentifier private constructor(
 ) : UIdentifier(psi, givenParent) {
 
     init {
-        if (ApplicationManager.getApplication().isUnitTestMode && !acceptableSourcePsi(sourcePsi))
+        if (false && !acceptableSourcePsi(sourcePsi))
             throw AssertionError("sourcePsi should be physical leaf element but got $sourcePsi of (${sourcePsi?.javaClass})")
     }
 
