@@ -560,6 +560,14 @@ tasks {
         dependsOn(":jps-plugin:test")
     }
 
+    create("konan-tests") {
+        dependsOn("dist")
+        dependsOn(
+            ":kotlin-native:kotlin-native-library-reader:test", 
+            ":kotlin-native:commonizer:test"
+        )
+    }
+
     create("idea-plugin-main-tests") {
         dependsOn("dist")
         dependsOn(":idea:test")
@@ -617,6 +625,7 @@ tasks {
         dependsOn(
             "idea-plugin-tests",
             "jps-tests",
+            "konan-tests",
             "plugins-tests",
             "android-ide-tests",
             ":generators:test"
